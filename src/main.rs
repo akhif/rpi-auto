@@ -890,6 +890,18 @@ async fn tokio_main(
         return Ok(());
     }
 
+    // Source mode (design note section 7): a refused guard leaves it off and drive mode untouched.
+    let source_mode = aa_proxy_rs::source_mode::effective_mode(&cfg);
+    if source_mode != cfg.source_mode {
+        cfg.source_mode = aa_proxy_rs::source_mode::SourceMode::Off;
+        config.write().await.source_mode = aa_proxy_rs::source_mode::SourceMode::Off;
+    }
+    if source_mode == aa_proxy_rs::source_mode::SourceMode::Always {
+        // Bring-up mode: no phone, Bluetooth or Wi-Fi; straight to the head unit session.
+        return aa_proxy_rs::source_mode::run_always(config.clone(), shutdown_requested.clone())
+            .await;
+    }
+
     let wifi_config = init_wifi_config(&cfg)
         .map_err(|e| {
             error!("{} WiFi config init failed: {}", NAME, e);

@@ -41,6 +41,7 @@ pub mod proxy;
 pub mod script_wasm;
 pub mod sdr_ui;
 pub mod sdr_ui_preview;
+pub mod source_mode;
 pub mod ssl;
 pub mod ssl_openssl;
 pub mod ssl_rustls;
