@@ -1,0 +1,62 @@
+#!/bin/sh
+#
+# Load kernel modules (non-blocking)
+#
+# WiFi/BT chip: AW859A, actually a Unisoc/Spreadtrum UWE5622
+# (package external/package/uwe5622).
+#
+
+start_usb_gadget()
+{
+	# CONFIG_USB_LIBCOMPOSITE is a module: without it,
+	# /sys/kernel/config/usb_gadget doesn't exist yet when S92usb_gadget
+	# runs, so it can't set up the accessory/default gadgets.
+	modprobe libcomposite
+}
+
+start_wifi_bt()
+{
+	# hciattach_opi reads the real BT MAC from /sys/class/addr_mgt/addr_bt
+	# (exposed by the sunxi_addr driver, see linux patches) and falls
+	# back to a hardcoded placeholder (BR/EDR-only, no LE reported) if that
+	# path doesn't exist. sprdwl_ng also pulls its WiFi MAC from the same
+	# driver, so load it before either.
+	modprobe sunxi_addr || return
+	modprobe sprdwl_ng || return
+
+	# wifi and BT share the same "marlin" chip firmware; the wifi
+	# module triggers its download/boot, and BT can't come up until
+	# that's done (fails with "not have card" otherwise). Poll for
+	# wlan0 instead of a blind sleep, capped at 5s.
+	i=0
+	while [ ! -e /sys/class/net/wlan0 ] && [ $i -lt 50 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+
+	modprobe sprdbt_tty || return
+
+	# BT stays rfkill-blocked by default at boot; hciattach_opi can't
+	# open /dev/ttyBT0 until it's unblocked.
+	rfkill unblock bluetooth
+
+	# hciattach_opi also loads /lib/firmware/bt_configure_{pskey,rf}.ini
+	# to calibrate the chip (manufacturer ID, BT/LE feature set). Without
+	# them it doesn't fail, it silently skips calibration and the
+	# controller comes up with no LE support. It exits on its own once
+	# attach completes; backgrounded so this script doesn't wait on it.
+	hciattach_opi -s 1500000 /dev/ttyBT0 sprd &
+}
+
+case "$1" in
+	start)
+		echo "Loading kernel modules..."
+		start_usb_gadget
+		start_wifi_bt
+		;;
+	*)
+		echo "Usage: $0 {start}"
+		exit 1
+esac
+
+exit 0

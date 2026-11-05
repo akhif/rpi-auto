@@ -1,0 +1,78 @@
+[pi4]
+start_file=start4.elf
+fixup_file=fixup4.dat
+
+[pi5]
+# Enable the Active Cooler / case fan (kernel pwm-fan driver)
+dtparam=cooling_fan=on
+
+# Underclock CPU
+arm_freq=1500
+arm_freq_min=500
+
+# Underclock GPU
+gpu_freq_min=500
+
+[all]
+kernel=u-boot.bin
+enable_uart=1
+
+# enable 64-bit kernel
+arm_64bit=1
+
+disable_splash=1
+boot_delay=0
+
+# To use an external initramfs file
+#initramfs rootfs.cpio.gz
+
+# disable HDMI (saves power)
+max_framebuffers=0
+# don't try to read HDMI eeprom
+hdmi_blanking=2
+hdmi_ignore_edid=0xa5000080
+hdmi_ignore_cec_init=1
+hdmi_ignore_cec=1
+hdmi_ignore_hotplug=1
+disable_fw_kms_setup=1
+# disable composite video output
+enable_tvout=0
+
+# all these options cause a wait for an I2C bus response
+force_eeprom_read=0
+disable_poe_fan=1
+ignore_lcd=1
+disable_touchscreen=1
+camera_auto_detect=0
+display_auto_detect=0
+
+# The following values are for speeding up the initial boot time:
+# Don't force turbo mode permanently (preserves warranty)
+force_turbo=0
+# Enable max CPU frequency for the first 20 seconds after boot
+initial_turbo=20
+# Disable automatic firmware-based boosting (manual control only)
+arm_boost=0
+
+# How much memory in MB to assign to the GPU on Pi models having 256, 512 or 1024 MB total memory
+# start_cd.elf (cut-down version without codecs and 3D) is used in the case we specify 16MB
+[pi0]
+gpu_mem_256=16
+gpu_mem_512=16
+[all]
+gpu_mem_512=64
+gpu_mem_1024=64
+
+# Enable autoprobing of Bluetooth driver without need of hciattach/btattach
+dtparam=krnbt=on
+
+# Enable dwc2 required for gadget mode
+dtoverlay=dwc2,dr_mode=peripheral
+
+# finally, force the 32-bit kernel for pi0w
+[pi0w]
+arm_64bit=0
+
+# override inherited settings back to restore 64-bit kernel on Pi Zero 2 W
+[pi02]
+arm_64bit=1
