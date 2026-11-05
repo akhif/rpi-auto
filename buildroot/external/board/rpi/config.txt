@@ -76,3 +76,13 @@ arm_64bit=0
 # override inherited settings back to restore 64-bit kernel on Pi Zero 2 W
 [pi02]
 arm_64bit=1
+
+# Pi Zero 2 W only: Pi mode needs the VideoCore H.264 encoder and vc4 KMS.
+# This section comes last so it overrides gpu_mem_512 above.
+[pi02]
+gpu_mem_512=128
+# vc4 KMS owns the display; the firmware framebuffer is not used.
+# Stock Raspberry Pi OS keeps max_framebuffers=2 with this overlay.
+max_framebuffers=2
+dtoverlay=vc4-kms-v3d
+[all]

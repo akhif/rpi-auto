@@ -1,0 +1,110 @@
+name: Build rpi02w SD image
+
+# Builds the Raspberry Pi Zero 2 W image from THIS repo's aa-proxy-rs code
+# (not upstream's), with the kernel and firmware Pi mode needs.
+# Adapted from buildroot/.github/workflows/build.yml (board rpi02w only).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # GitHub's hard limit is 6 hours (360 min). Stop just before it so the
+    # timing summary and logs still upload.
+    timeout-minutes: 350
+    env:
+      BOARD: rpi02w
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --build-arg UID="$(id -u)" \
+            --build-arg GID="$(id -g)" \
+            -t aaproxybr buildroot
+
+      # Build aa-proxy-rs from this repo's root instead of fetching upstream.
+      # Buildroot reads $(O)/local.mk before the package files.
+      # - The repo root contains buildroot/ itself (with its output tree), so
+      #   exclude it from the copy, plus Rust's target/.
+      # - OVERRIDE_SRCDIR skips the download step, which is where Buildroot
+      #   normally vendors the crates. cargo runs with --offline, so vendor
+      #   them after the rsync, as Buildroot's cargo-post-process does.
+      - name: Configure local.mk (build aa-proxy-rs from this repo)
+        run: |
+          OUT=buildroot/buildroot/output/${BOARD}
+          mkdir -p "$OUT"
+          cat > "$OUT/local.mk" <<'MK'
+          # Container path: the repo root is mounted at /app
+          AA_PROXY_RS_OVERRIDE_SRCDIR = /app
+          AA_PROXY_RS_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = --exclude=/buildroot --exclude=/target
+
+          define AA_PROXY_RS_VENDOR_CRATES
+          	mkdir -p $(@D)/.cargo $(BR_CARGO_HOME)
+          	echo >> $(@D)/.cargo/config.toml
+          	cd $(@D) && flock $(BR_CARGO_HOME)/.br-lock \
+          		env CARGO_HOME=$(BR_CARGO_HOME) cargo vendor --locked VENDOR >> .cargo/config.toml
+          endef
+          AA_PROXY_RS_POST_RSYNC_HOOKS += AA_PROXY_RS_VENDOR_CRATES
+          MK
+          # The heredoc is indented for YAML; make needs real tabs in recipes
+          # and no leading spaces on the other lines.
+          sed -i -e 's/^          //' -e 's/^\t\t*/\t/' "$OUT/local.mk"
+          cat -A "$OUT/local.mk"
+
+      - name: Build image
+        id: build
+        run: |
+          set -e
+          START=$(date +%s)
+          docker run --rm -v "$PWD:/app:z" -w /app/buildroot aaproxybr \
+            /app/buildroot/build-image.sh "${BOARD}" --rmwork
+          END=$(date +%s)
+          MIN=$(( (END - START) / 60 ))
+          echo "minutes=$MIN" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Build time"
+            echo "${BOARD} image build took **${MIN} min** (job limit 360 min)."
+            if [ "$MIN" -ge 270 ]; then
+              echo
+              echo "> **Warning:** this is over 75% of the 6-hour job limit."
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect images
+        run: |
+          set -e
+          mkdir images
+          IMAGE_DIR=buildroot/buildroot/output/${BOARD}/images
+          xz -T0 -c "$IMAGE_DIR/sdcard.img" > images/${BOARD}-sdcard.img.xz
+          cp -f "$IMAGE_DIR/update_image.swu" images/${BOARD}.swu
+          ls -lh images
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BOARD }}-logs
+          path: buildroot/buildroot/output/${{ env.BOARD }}/build.log
+          if-no-files-found: warn
+
+      - name: Upload SD-card image
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BOARD }}-sdcard
+          path: images/${{ env.BOARD }}-sdcard.img.xz
+
+      - name: Upload SWU update file
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.BOARD }}-swu
+          path: images/${{ env.BOARD }}.swu
