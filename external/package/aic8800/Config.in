@@ -1,0 +1,83 @@
+menuconfig BR2_PACKAGE_AIC8800
+    bool "AIC8800 Support"
+    help
+      AICSemi AIC8800 Wireless Drivers
+
+if BR2_PACKAGE_AIC8800
+
+choice
+    prompt "AIC8800 Chip Interface"
+    default BR2_PACKAGE_AIC8800_INTERFACE_SDIO
+
+    config BR2_PACKAGE_AIC8800_INTERFACE_SDIO
+        select BR2_PACKAGE_AIC8800_BSP
+        bool "SDIO"
+
+    config BR2_PACKAGE_AIC8800_INTERFACE_USB
+        bool "USB"
+
+    config BR2_PACKAGE_AIC8800_INTERFACE_PCIE
+        bool "PCIe"
+endchoice
+
+config BR2_PACKAGE_AIC8800_BSP
+    bool
+    default n
+
+config BR2_PACKAGE_AIC8800_WLAN
+    bool "AIC8800 WLAN Support"
+    default y
+
+config BR2_PACKAGE_AIC8800_BT_SDIO_FORCED
+    bool
+    default y if BR2_PACKAGE_AIC8800_INTERFACE_SDIO && (BR2_PACKAGE_AIC8800_FW_AIC8800D80 || BR2_PACKAGE_AIC8800_FW_AIC8800D80X2)
+
+choice
+    default BR2_PACKAGE_AIC8800_BT_NONE if !BR2_PACKAGE_AIC8800_BT_SDIO_FORCED
+    default BR2_PACKAGE_AIC8800_BT_SDIO if BR2_PACKAGE_AIC8800_BT_SDIO_FORCED
+    prompt "AIC8800 Bluetooth Driver"
+
+config BR2_PACKAGE_AIC8800_BT_LPM
+    bool "AICSemi SDIO/UART Bluetooth Driver"
+    depends on BR2_PACKAGE_AIC8800_INTERFACE_SDIO
+    help
+        We are unsure about the functionality of this driver.
+
+config BR2_PACKAGE_AIC8800_BT_SDIO
+    bool "AICSemi SDIO Bluetooth Driver"
+    depends on BR2_PACKAGE_AIC8800_BT_SDIO_FORCED
+    help
+        Allows bluetooth to be used over SDIO instead of UART
+
+config BR2_PACKAGE_AIC8800_BT_USB
+    bool "AICSemi USB Bluetooth driver"
+    depends on BR2_PACKAGE_AIC8800_INTERFACE_USB
+
+config BR2_PACKAGE_AIC8800_BT_NONE
+    bool "No Bluetooth support"
+    depends on !BR2_PACKAGE_AIC8800_BT_SDIO_FORCED
+
+endchoice
+
+menu "Firmware Images"
+config BR2_PACKAGE_AIC8800_FW_AIC8800
+    depends on !BR2_PACKAGE_AIC8800_INTERFACE_PCIE
+    bool "AIC8800 Firmware Images"
+
+config BR2_PACKAGE_AIC8800_FW_AIC8800D80
+    depends on !(BR2_PACKAGE_AIC8800_INTERFACE_PCIE && BR2_PACKAGE_AIC8800_FW_AIC8800D80X2)
+    bool "AIC8800D80 Firmware Images" 
+
+config BR2_PACKAGE_AIC8800_FW_AIC8800D80N
+    depends on !BR2_PACKAGE_AIC8800_INTERFACE_PCIE
+    bool "AIC8800D80N Firmware Images" 
+
+config BR2_PACKAGE_AIC8800_FW_AIC8800D80X2
+    bool "AIC8800D80X2 Firmware Images"
+
+config BR2_PACKAGE_AIC8800_FW_AIC8800DC
+    depends on !BR2_PACKAGE_AIC8800_INTERFACE_PCIE
+    bool "AIC8800DC Firmware Images"
+endmenu
+
+endif
