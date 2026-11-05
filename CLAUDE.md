@@ -11,7 +11,7 @@ Personal build for one car, a 2025 Toyota RAV4 with wired-only Android Auto. A R
 ## Layout
 
 - Repo root: a GitHub fork of [aa-proxy/aa-proxy-rs](https://github.com/aa-proxy/aa-proxy-rs). Our Rust changes live in `src/` alongside upstream's.
-- `buildroot/`: upstream [aa-proxy/buildroot](https://github.com/aa-proxy/buildroot), a br2-external tree (Buildroot itself is a submodule), imported with `git subtree`. It builds the SD image. Issue T01 adds it.
+- `buildroot/`: upstream [aa-proxy/buildroot](https://github.com/aa-proxy/buildroot), a br2-external tree (Buildroot itself is a submodule), imported with `git subtree`. It builds the SD image.
 - `docs/`: `SPEC.md` plus design notes.
 
 Upstream updates: aa-proxy-rs through GitHub's "Sync fork" or `git fetch upstream && git merge upstream/main` (remote `upstream` = https://github.com/aa-proxy/aa-proxy-rs); Buildroot through `git subtree pull --prefix=buildroot https://github.com/aa-proxy/buildroot main --squash`.
@@ -19,7 +19,8 @@ Upstream updates: aa-proxy-rs through GitHub's "Sync fork" or `git fetch upstrea
 ## How work flows
 
 - The **planner** (Akhif with Claude in claude.ai) owns `docs/SPEC.md`, the GitHub milestones and the issues. Each issue labelled `task` is one self-contained brief; issues labelled `manual` are Akhif's own steps.
-- An **executor** session takes exactly one `task` issue: branch `t<NN>-<slug>`, a PR titled `T<NN>: <summary>` whose description includes `Closes #<issue>`.
+- An **executor** session takes exactly one `task` issue, works on the branch the session assigns, and opens a PR titled `T<NN>: <summary>` whose description includes `Closes #<issue>`.
+- The planner reviews and merges. PRs are merged with a merge commit, never squashed, because `git subtree pull` needs the subtree merge history intact.
 - Every PR description ends with two sections:
   - **On-device test plan**: numbered steps Akhif runs on the Pi or in the car, covering what to flash, what to tap, what to expect, and the log lines that confirm it (`/var/log/aa-proxy-rs.log`). Write "None" when nothing on the device changed.
   - **Plan notes**: anything that should change the spec, later tasks or estimates. Executors propose there; the planner edits the spec and the issues.
