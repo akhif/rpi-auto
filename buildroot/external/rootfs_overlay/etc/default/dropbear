@@ -1,0 +1,11 @@
+#!/bin/sh
+
+DROPBEAR_ARGS="-b /etc/issue"
+
+# Skip SSH startup if explicitly disabled in config.toml
+CONFIG_FILE="/etc/aa-proxy-rs/config.toml"
+
+if [ -f "$CONFIG_FILE" ] && grep -Eq '^\s*enable_ssh\s*=\s*false\s*$' "$CONFIG_FILE"; then
+    echo "SSH is disabled via $CONFIG_FILE"
+    exit
+fi

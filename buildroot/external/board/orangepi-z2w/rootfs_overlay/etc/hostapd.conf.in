@@ -1,0 +1,27 @@
+ctrl_interface=/var/run/hostapd
+interface=wlan0
+# nl80211 is the only backend implemented by the WiFi driver of the
+# Unisoc (ex-Spreadtrum) UWE5622 WiFi/BT combo chip
+# (kernel module sprdwl_ng).
+driver=nl80211
+
+# 5 GHz needs the DS Params patch on hostapd 2.11
+# (board/orangepi-z2w/patches/hostapd): the UWE5622 firmware sends no
+# 5 GHz beacon without that element.
+#
+# No ieee80211be line: the chip has no WiFi 7 support.
+hw_mode={{HW_MODE}}
+ieee80211ax={{AX_MODE}}
+ieee80211ac={{AC_MODE}}
+ieee80211n={{N_MODE}}
+channel={{CHANNEL}}
+
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=CCMP
+
+ssid={{SSID}}
+
+wpa_passphrase={{WPA_PASSPHRASE}}
+country_code={{COUNTRY_CODE}}

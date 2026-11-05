@@ -1,0 +1,30 @@
+config BR2_PACKAGE_RKWIFIBT
+	bool "Rockchip Bluetooth and Wi-Fi support"
+
+config BR2_PACKAGE_RKWIFIBT_RTL8733BS
+	bool "Realtek RTL8733BS support"
+	depends on BR2_PACKAGE_RKWIFIBT
+
+config BR2_PACKAGE_RKWIFIBT_AIC8800
+	bool "AIC8800 support"
+	depends on BR2_PACKAGE_RKWIFIBT
+
+config BR2_PACKAGE_RKWIFIBT_AP625X
+	bool "AP6254 / AP6255 / AP6256 (AW-CM256) support"
+	depends on BR2_PACKAGE_RKWIFIBT
+	help
+	  Install the firmware for all three BCM43455/BCM43456 modules. Which
+	  one a board is populated with is not fixed, and the device tree's
+	  wifi_chip_type does not decide it: bcmdhd picks the Wi-Fi firmware
+	  from the SDIO chip id it probes, and the Bluetooth init script picks
+	  the matching patchram the same way.
+
+config BR2_PACKAGE_RKWIFIBT_BT_UART_DEV
+	string "Bluetooth UART dev"
+	depends on BR2_PACKAGE_RKWIFIBT
+	default "ttyS0"
+
+config BR2_PACKAGE_RKWIFIBT_BT_UART_BAUDRATE
+	string "Bluetooth UART baudrate"
+	depends on BR2_PACKAGE_RKWIFIBT
+	default "115200"

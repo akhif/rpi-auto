@@ -1,0 +1,142 @@
+name: Build SD images
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: "Board to build (or 'all')"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - aaw1-cs307
+          - aaw1-cs317
+          - aaw2b
+          - aaw3
+          - rpi02w
+          - rpi0w
+          - rpi3a
+          - rpi4
+          - rpi5
+          - radxa03w
+          - milkv-duos
+          - milkv-duos-emmc
+          - orangepi-z2w
+      aa_proxy_rs_ref:
+        description: "aa-proxy-rs branch/tag/commit (empty = keep default from .mk)"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      boards: ${{ steps.set.outputs.boards }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ inputs.board }}" = "all" ] || [ -z "${{ inputs.board }}" ]; then
+            echo 'boards=["aaw1-cs307","aaw1-cs317","aaw2b","aaw3","rpi02w","rpi0w","rpi3a","rpi4","rpi5","radxa03w","milkv-duos","milkv-duos-emmc","orangepi-z2w"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'boards=["${{ inputs.board }}"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        board: ${{ fromJson(needs.prepare.outputs.boards) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Override aa-proxy-rs version
+        if: inputs.aa_proxy_rs_ref != ''
+        env:
+          REF: ${{ inputs.aa_proxy_rs_ref }}
+        run: |
+          set -e
+          MK=external/package/aa-proxy-rs/aa-proxy-rs.mk
+          sed -i "s|^AA_PROXY_RS_VERSION = .*|AA_PROXY_RS_VERSION = ${REF}|" "$MK"
+          grep '^AA_PROXY_RS_VERSION' "$MK"
+
+      - name: Build Docker image
+        run: CONTAINER_ENGINE=docker ./docker-dev.sh build
+
+      - name: Build image for ${{ matrix.board }}
+        run: |
+          set -e
+          mkdir images
+          echo "Building board: ${{ matrix.board }}"
+          CONTAINER_ENGINE=docker ./docker-dev.sh "${{ matrix.board }}" --rmwork
+          IMAGE_DIR=buildroot/output/${{ matrix.board }}/images
+          
+          if [[ "${{ matrix.board }}" == "aaw2b" || "${{ matrix.board }}" == "aaw3" ]]; then
+            TAR_NAME=images/${{ matrix.board }}-images.tar.xz
+          
+            BOOT_IMG=""
+            if [[ "${{ matrix.board }}" == "aaw3" ]]; then
+              BOOT_IMG="boot1.img boot2.img"
+            fi
+          
+            tar -cJf "$TAR_NAME" -C "$IMAGE_DIR" download.bin env.img env_r.img idblock.img uboot.img $BOOT_IMG root.img
+          elif [[ "${{ matrix.board }}" == "milkv-duos-emmc" ]]; then
+            TAR_NAME=images/${{ matrix.board }}-images.tar.xz
+            echo "Compressing entire images/output directory for eMMC..."
+            tar -cJf "$TAR_NAME" -C "$IMAGE_DIR/output" .
+          else
+            IMG="$IMAGE_DIR/sdcard.img"
+            if [[ -f "$IMG" ]]; then
+              xz -c "$IMG" > images/${{ matrix.board }}-sdcard.img.xz
+            else
+              echo "WARNING: Image $IMG not found!"
+              #exit 1
+            fi
+          fi
+          
+          UPDATE_IMG="$IMAGE_DIR/update_image.swu"
+          if [[ -f "$UPDATE_IMG" ]]; then
+            cp -f "$UPDATE_IMG" images/${{ matrix.board }}.swu
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.board }}-logs
+          path: buildroot/output/${{ matrix.board }}/build.log
+          if-no-files-found: warn
+
+      - name: Upload AAW artifact
+        if: matrix.board == 'aaw2b' || matrix.board == 'aaw3' || matrix.board == 'milkv-duos-emmc'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.board }}-images
+          path: images/${{ matrix.board }}-images.tar.xz
+
+      - name: Upload SD-card artifact
+        if: matrix.board != 'aaw2b' && matrix.board != 'aaw3'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.board }}-sdcard
+          path: images/${{ matrix.board }}-sdcard.img.xz
+
+      - name: Upload SWU artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.board }}-swu
+          path: images/${{ matrix.board }}.swu
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/upload-artifact/merge@v7
+        with:
+          name: aa-proxy-rs-merged
