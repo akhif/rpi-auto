@@ -2,3 +2,6 @@
 /target
 /output
 config.toml
+
+# Device certificates and keys never enter git
+*.pem
