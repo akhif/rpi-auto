@@ -150,7 +150,7 @@ const _CONTROL: u8 = 1 << 2;
 pub const ENCRYPTED: u8 = 1 << 3;
 
 // location for hu_/md_ private keys and certificates:
-const KEYS_PATH: &str = crate::base_config_dir!();
+pub(crate) const KEYS_PATH: &str = crate::base_config_dir!();
 
 // DHU string consts for developer mode
 pub const DHU_MAKE: &str = "Google";
@@ -1060,7 +1060,7 @@ pub struct Packet {
 
 impl Packet {
     /// payload encryption if needed
-    async fn encrypt_payload(
+    pub(crate) async fn encrypt_payload(
         &mut self,
         mem_buf: &mut SslMemBuf,
         conn: &mut AaConnection,
@@ -1074,7 +1074,7 @@ impl Packet {
     }
 
     /// payload decryption if needed
-    async fn decrypt_payload(
+    pub(crate) async fn decrypt_payload(
         &mut self,
         mem_buf: &mut SslMemBuf,
         conn: &mut AaConnection,
@@ -1088,7 +1088,7 @@ impl Packet {
     }
 
     /// composes a final frame and transmits it to endpoint device (HU/MD)
-    async fn transmit<D: IoDeviceTrait>(
+    pub(crate) async fn transmit<D: IoDeviceTrait>(
         &self,
         device: &mut D,
     ) -> std::result::Result<usize, std::io::Error> {
@@ -4126,7 +4126,7 @@ pub async fn send_tire_pressure_data(
 }
 
 /// encapsulates SSL data into Packet
-fn ssl_encapsulate(outgoing: Vec<u8>) -> Packet {
+pub(crate) fn ssl_encapsulate(outgoing: Vec<u8>) -> Packet {
     let message_type = ControlMessageType::MESSAGE_ENCAPSULATED_SSL as u16;
     let mut payload = outgoing;
     payload.insert(0, (message_type >> 8) as u8);
@@ -4226,7 +4226,7 @@ impl_endpoint_reader!([A: Endpoint<A>], IoDevice<A>);
 #[cfg(not(feature = "io-uring"))]
 impl_endpoint_reader!([D: IoDeviceTrait], D);
 
-fn build_control_reply(message_id: ControlMessageType, payload: Vec<u8>) -> Packet {
+pub(crate) fn build_control_reply(message_id: ControlMessageType, payload: Vec<u8>) -> Packet {
     let mut payload = payload;
     payload.insert(0, ((message_id as u16) >> 8) as u8);
     payload.insert(1, ((message_id as u16) & 0xff) as u8);
@@ -4239,7 +4239,7 @@ fn build_control_reply(message_id: ControlMessageType, payload: Vec<u8>) -> Pack
     }
 }
 
-fn build_control_reply_on_channel(
+pub(crate) fn build_control_reply_on_channel(
     channel: u8,
     message_id: ControlMessageType,
     payload: Vec<u8>,

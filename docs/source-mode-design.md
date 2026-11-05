@@ -1,6 +1,6 @@
 # Source mode design note (T02)
 
-Design for **Pi mode** (code name **source mode**): the Pi is the Android Auto mobile device and the head unit (HU) is the sink. This note is the M2 risk gate. It contains no implementation code. It was written from a read of this fork at commit `6157edc`, without hardware access.
+Design for **Pi mode** (code name **source mode**): the Pi is the Android Auto mobile device and the head unit (HU) is the sink. This note is the M2 risk gate. It contains no implementation code. It was written from a read of this fork at commit `6157edc`, without hardware access. T05 added section 1a (the direction table) and corrected sections 1, 2, 3.1 and 4 to match it.
 
 Evidence tags used below:
 
@@ -28,11 +28,11 @@ Sequence for the HU side, with the source-mode difference noted at each step. Al
 | 1 | USB: HU runs the AOA handshake, gadget gives bulk pipes | `FfsGadget` → `AccessorySession` [repo `usb_functionfs.rs`] | Unchanged. |
 | 2 | HU sends `VERSION_REQUEST` (plain, major/minor) | Forwarded to the phone and the phone's reply is relayed (`mitm.rs:4341`) | Pi answers `VERSION_RESPONSE` itself: same major, minor, status 0. |
 | 3 | TLS: HU is the client, Pi is the server | `ssl_builder(HeadUnit)` with `md_*.pem` (`mitm.rs:4372`) | Identical code. The SSL handshake loop is copied or factored out. |
-| 4 | Phone sends `AUTH_COMPLETE` (`AuthResponse{status=0}`) | Passes through | Pi sends it right after the handshake. [proto] |
-| 5 | Phone sends `SERVICE_DISCOVERY_REQUEST` | Passes through | Pi sends it with `device_name`/`label_text` such as "Kodi" and a small icon. [proto] |
+| 4 | **HU** sends `AUTH_COMPLETE` (`AuthResponse{status=0}`, a plain frame) right after the handshake. See section 1a for the evidence gap. | Passes through | Pi receives it and does not reply. A non-zero status ends the session. If it does not arrive within 3 s the Pi goes on to step 5 and logs a warning. [proto] |
+| 5 | Phone sends `SERVICE_DISCOVERY_REQUEST` | Passes through | Pi sends it with `device_name`/`label_text` "Kodi" and no icons (T05). |
 | 6 | HU replies `SERVICE_DISCOVERY_RESPONSE` | Parsed in `pkt_modify_hook` (`mitm.rs:3101`) | Pi parses it into a `HuCaps` struct (see below). |
-| 7 | Phone sends `CHANNEL_OPEN_REQUEST{priority, service_id}` on each service channel; HU answers `CHANNEL_OPEN_RESPONSE` | Passes through | Pi opens only the channels in section 2. |
-| 8 | Ping both ways, HU-initiated `AUDIO_FOCUS_REQUEST`, `NAV_FOCUS_REQUEST`, `VOICE_SESSION_NOTIFICATION` | Passes through | Handled locally (section 2, control row). |
+| 7 | Phone sends `CHANNEL_OPEN_REQUEST{priority, service_id}` on the service channel itself (frame flags `0x0f`); HU answers `CHANNEL_OPEN_RESPONSE` on the same channel | Passes through | Pi opens only the channels in section 2. |
+| 8 | Ping both ways. Focus runs request (phone → HU) then notification (HU → phone). `VOICE_SESSION_NOTIFICATION` has no proven direction. | Passes through | Pings handled locally. The Pi sends the focus requests itself (section 2, safety rule; sections 3.1 and 4). Voice is logged and ignored. |
 | 9 | `BYEBYE_REQUEST`/`RESPONSE` | Forwarded | Pi sends it on exit and answers it when the HU sends it. |
 
 The channel number equals the service id from the HU's response. [repo: `build_control_reply_on_channel` and the `transparency:` comment at `mitm.rs:4632`]
@@ -45,9 +45,51 @@ The channel number equals the service id from the HU's response. [repo: `build_c
 - sensor source: the sensor types the HU offers
 - the set of all other services, for logging only
 
-If the HU lacks a video sink, an `h264` config, or a sensor service with speed, the session ends with a clear log line (`source: HU offers no usable video sink`). Missing speed is a hard stop because of the safety rule in section 2.
+If the HU lacks a main-display video sink with an `h264` config, the session ends with a clear log line (`source: HU offers no usable video sink`). A missing speed sensor does not end the session. It logs a warning, and the safety rule in section 2 then counts the car as moving, so video stays paused once it is streamed (T07). Ending the session on it would make the DHU test, whose sensor list is not known to include speed, impossible.
 
-New code reuses `Packet`, `endpoint_reader` and `build_control_reply[_on_channel]` from `mitm.rs`. Section 11 lists the visibility changes needed. `pkt_modify_hook` is **not** reused. It assumes two peers (`ProxyType` plus `PacketFlow`) and carries the injection and overlay logic.
+New code reuses `Packet` (with its encrypt, decrypt and transmit helpers), `ssl_encapsulate` and `build_control_reply[_on_channel]` from `mitm.rs`. It does not reuse `endpoint_reader`: under the `io-uring` feature that function takes the concrete `IoDevice<A>` type, and the session is written against the generic `IoDevice` trait so it runs with either backend. The session has its own small frame parser instead. Section 11 lists the visibility changes. `pkt_modify_hook` is **not** reused. It assumes two peers (`ProxyType` plus `PacketFlow`) and carries the injection and overlay logic.
+
+## 1a. Direction table
+
+Added in T05, from a second read of the relay code. The source session is the *phone* side of every row: where the table says "phone → HU" the Pi sends, and where it says "HU → phone" the Pi receives. The `ProxyType` that handles a message in `mitm.rs` shows who sent it: `ProxyType::HeadUnit` is the half that talks to the real HU (it reads frames the HU sent, and its `rx` channel carries frames the phone sent); `ProxyType::MobileDevice` is the half that talks to the phone. The session code follows this table.
+
+Evidence tags: **[repo]** is code in this fork that handles the message on a known side. **[proto]** means no relay code handles the message (the relay forwards it untouched), so the direction rests on the `.proto` definitions and the aasdk and headunit implementations of the HU role. Every **[proto]** row is to be checked against Akhif's M0 packet trace when it lands on issue #1 (nothing is posted there yet), and any difference noted here.
+
+| Message (id) | Channel, flags | Sent by | Source session does | Evidence |
+| --- | --- | --- | --- | --- |
+| `VERSION_REQUEST` (0x0001) | 0, plain | HU | Receives. | [repo] `proxy()` `HeadUnit` branch: "waiting for initial version frame (HU is starting transmission)", then forwards it to the phone half (`mitm.rs:4340`). `MobileDevice` branch: "expecting version request from the HU" (`mitm.rs:4433`). |
+| `VERSION_RESPONSE` (0x0002) | 0, plain | phone | Sends: same major and minor as asked, status 0. | [repo] same two places: the phone's reply is relayed to the HU (`mitm.rs:4354-4357`, `4454-4471`). Frame layout: `maybe_override_raw_control_protocol_version`, `mitm.rs:1442`. |
+| `ENCAPSULATED_SSL` (0x0003) | 0, plain | both | HU is the TLS client, the Pi is the TLS server with `md_cert.pem`/`md_key.pem`. | [repo] `ssl_builder(HeadUnit)` builds a rustls *server* from `md_*` (`ssl_rustls.rs:435`); the `HeadUnit` branch only processes data the HU sent first (`mitm.rs:4371`). M0 with `mitm = true` shows `SSL init complete` for the HU side. |
+| `AUTH_COMPLETE` (0x0004) | 0, plain | **HU** | Receives. Does not send or reply. A non-zero status ends the session; no frame within 3 s is tolerated with a warning. | **[proto] only.** No code path in this fork sends or handles it. `pkt_modify_hook` has no arm for it, so the relay forwards it in both directions. Only the name tables (`mitm.rs:803`) and the pretty-printer (`mitm_prettyprint.rs:831`, `AuthResponse`) know it. The HU-sends direction comes from the aasdk and headunit HU implementations, which send it plain right after their handshake. The first draft of this note had the phone sending it, which is the unproven opposite. Check against the M0 trace first. |
+| `SERVICE_DISCOVERY_REQUEST` (0x0005) | 0, encrypted | phone | Sends: `device_name` and `label_text` "Kodi", no icons. | [proto] for the request itself. Implied by [repo] below: the response is the HU's, so the request is the phone's. |
+| `SERVICE_DISCOVERY_RESPONSE` (0x0006) | 0, encrypted | HU | Receives, builds `HuCaps`. | [repo] parsed and rewritten in `pkt_modify_hook` (`mitm.rs:3101`) on the way to the phone; the services it lists are recorded as the real HU's (`hu_service_ids`, `mitm.rs:3789`) and the sensor and input channels are read from it (`mitm.rs:3371`). |
+| `CHANNEL_OPEN_REQUEST` (0x0007) | service channel (= service id), flags `0x0f` | phone | Sends for the main video sink, input and sensor services. | [repo] the `HeadUnit` half answers the phone's requests for injected services locally, on the service channel itself, flags `0x0f` (`mitm.rs:4632-4660`, comment at `4252`). The phone may also use channel 0 (`mitm.rs:3070-3076`); the HU's reply comes back on whichever channel was used. |
+| `CHANNEL_OPEN_RESPONSE` (0x0008) | same channel, `0x0f` | HU | Receives; anything but `STATUS_SUCCESS` ends the session. | [repo] same code, in the other direction. |
+| `CHANNEL_CLOSE_NOTIFICATION` (0x0009) | service channel, `0x0f` | either | Receives; ends the session. | [proto] |
+| `PING_REQUEST` / `PING_RESPONSE` (0x000B / 0x000C) | 0, encrypted | both | Answers the HU's request with the same timestamp. Sends its own every 5 s; 3 unanswered in a row end the session. | [proto] the relay forwards them (no arm in `pkt_modify_hook`). |
+| `NAV_FOCUS_REQUEST` (0x000D) / `NAV_FOCUS_NOTIFICATION` (0x000E) | 0, encrypted | request: phone. Notification: HU | Never sends the request (Kodi needs none). Logs a notification. | [proto] message names `NavFocusRequestNotification` / `NavFocusNotification`; planner review of PR #7. |
+| `AUDIO_FOCUS_REQUEST` (0x0012) / `AUDIO_FOCUS_NOTIFICATION` (0x0013) | 0, encrypted | request: phone. Notification: HU | M3 sends `GAIN` and `RELEASE` requests. T05 logs a notification. | [repo] `protos.proto`: request types are `GAIN`, `GAIN_TRANSIENT`, `GAIN_TRANSIENT_MAY_DUCK`, `RELEASE`; notification states include `LOSS`, `LOSS_TRANSIENT`. A requester cannot ask for a loss, so the HU is the one that reports it. |
+| `VOICE_SESSION_NOTIFICATION` (0x0011) | 0, encrypted | unproven | Never sends. Logs and ignores. | [proto] no relay arm; direction not established. |
+| `CAR_CONNECTED_DEVICES_REQUEST` / `_RESPONSE` (0x0014 / 0x0015) | 0, encrypted | unproven | Answers a request with an empty list. A response is logged once as unhandled. | [proto] no relay arm; direction not established. |
+| `BATTERY_STATUS_NOTIFICATION` / `CALL_AVAILABILITY_STATUS` (0x0017 / 0x0018) | 0, encrypted | phone | Not sent. Logged once if seen. | [proto] no relay arm. |
+| `BYEBYE_REQUEST` (0x000F) | 0, encrypted | both | Answers the HU's with `BYEBYE_RESPONSE` and ends. Sends its own (`USER_SELECTION`) when cancelled and waits up to 1 s for the answer. | [repo] phone → HU: the `MobileDevice` half reads `USER_SELECTION` as the Disconnect button (`mitm.rs:2981-2990`). HU → phone: `send_byebye` ("Sending ByeByeRequest (USER_SELECTION) to phone", `mitm.rs:3976-3993`; callers `main.rs:664`, `web.rs:954`). |
+| `BYEBYE_RESPONSE` (0x0010) | 0, encrypted | the side that received the request | As above. | [proto] no relay arm. |
+| `SENSOR_MESSAGE_REQUEST` (0x8001) | sensor channel, encrypted | phone | Sends one per wanted sensor the HU offers. | [repo] the relay answers a phone's request with a synthetic response sent back to the phone (`mitm.rs:2255-2300`). |
+| `SENSOR_MESSAGE_RESPONSE` (0x8002) | sensor channel | HU | Receives, logs the status. | [repo] same code. |
+| `SENSOR_MESSAGE_BATCH` (0x8003) | sensor channel | HU | Receives. Logs speed (m/s × 1000), driving status, night mode, parking brake, gear and, with `source_gps`, location. | [repo] read on the `HeadUnit` half from the HU endpoint (`mitm.rs:2331-2345`). |
+| `SENSOR_MESSAGE_ERROR` (0x8004) | sensor channel | HU | Receives, logs. | [proto] |
+| `KEY_BINDING_REQUEST` (0x8002) / `KEY_BINDING_RESPONSE` (0x8003) | input channel | request: phone. Response: HU | Sends the keycodes Kodi uses that the HU offers. | [proto] no relay arm. |
+| `INPUT_REPORT` (0x8001) | input channel | HU | Receives. Logs touch and key events. | [repo] the `HeadUnit` half intercepts input reports from the HU's input channel (`mitm.rs:2197`, `hu_input.rs`). |
+| `MEDIA_MESSAGE_SETUP` / `START` / `STOP` (0x8000 / 0x8001 / 0x8002) | media channel | phone | Not sent in T05 (T06). | [repo] `display.rs:964-1059`: the proxy in the HU role handles them as coming from the phone. |
+| `MEDIA_MESSAGE_CONFIG` / `ACK` (0x8003 / 0x8004) | media channel | HU | T05 logs if seen. | [repo] same code: the HU role sends them back (`rewrite_media_ack`, `display.rs:325`). |
+| `MEDIA_MESSAGE_DATA` / `CODEC_CONFIG` (0x0000 / 0x0001) | media channel | phone | Not sent in T05 (T06). | [repo] `display.rs:1026`: the HU role acks each DATA it receives. |
+| `VIDEO_FOCUS_REQUEST` (0x8007) | video channel | phone | Not sent in T05 (T06 and T07 send it). | [repo] `display.rs:1064`: the HU role receives it from the phone and answers with a notification. |
+| `VIDEO_FOCUS_NOTIFICATION` (0x8008) | video channel | HU | T05 logs it. | [repo] `mitm.rs:213` and `observe_real_video_focus` (`display.rs:456`): the real HU's notification, read on the `HeadUnit` half. |
+
+What the table changes:
+
+- `AUTH_COMPLETE` and every focus message: sections 1, 2, 3.1 and 4 were wrong or unproven and are fixed above.
+- Three directions rest on [proto] alone and matter most: `AUTH_COMPLETE` (HU → phone), `PING_*` (both ways), `KEY_BINDING_*`. If the DHU run or the M0 trace shows otherwise, change the table and `session.rs` together.
 
 ## 2. Every channel
 
@@ -55,7 +97,7 @@ Rule: the Pi opens a channel only if it uses it. A channel it never opens never 
 
 | Channel (service in SDR) | Source-mode handling | M2 | Later |
 | --- | --- | --- | --- |
-| **Control (0)** | Reply to `PING_REQUEST`. Send own ping every 5 s and end the session after 3 missed replies. `AUDIO_FOCUS_REQUEST` from the HU: reply `AUDIO_FOCUS_NOTIFICATION` (GAIN when Kodi plays, LOSS otherwise). `NAV_FOCUS_REQUEST`: reply `NAV_FOCUS_NOTIFICATION` (projected). `VOICE_SESSION_NOTIFICATION`: log and ignore. `CAR_CONNECTED_DEVICES_REQUEST`: reply with an empty list. `BATTERY_STATUS_NOTIFICATION` and `CALL_AVAILABILITY_STATUS`: send a fixed value once if the HU asks. `BYEBYE`: reply and end the session. Unknown message ids: log once at `warn` and keep going. | yes | |
+| **Control (0)** | Reply to `PING_REQUEST`. Send own ping every 5 s and end the session after 3 missed replies. Focus runs the other way from the first draft of this note: the Pi *sends* `AUDIO_FOCUS_REQUEST` (GAIN or RELEASE) and `VIDEO_FOCUS_REQUEST`, and the HU answers with `AUDIO_FOCUS_NOTIFICATION` and `VIDEO_FOCUS_NOTIFICATION`; the HU may also send a notification unsolicited. The Pi does not send `NAV_FOCUS_REQUEST` (Kodi has no navigation prompts); a `NAV_FOCUS_NOTIFICATION` is logged. `VOICE_SESSION_NOTIFICATION`: log and ignore. `CAR_CONNECTED_DEVICES_REQUEST`: reply with an empty list. `BATTERY_STATUS_NOTIFICATION` and `CALL_AVAILABILITY_STATUS` are phone-to-HU information messages that the Pi does not send. `BYEBYE`: reply and end the session. Unknown message ids: log once at `warn` and keep going. The video and audio focus requests arrive with the media tasks; T05 only logs the notifications. | yes | |
 | **Video sink** (`media_sink_service`, H.264) | Section 3. Open the main display only. Ignore auxiliary or cluster displays (`display_type`). | yes | |
 | **Media audio** (`AUDIO_STREAM_MEDIA`) | Section 4. | no | M3 |
 | **Guidance audio** (`AUDIO_STREAM_GUIDANCE`) | Not opened. Kodi produces no navigation prompts. | no | no |
@@ -74,8 +116,8 @@ Rule: the Pi opens a channel only if it uses it. A channel it never opens never 
 
 **Safety rule** (SPEC, "Safety"): the Pi pauses video when the HU reports speed above 0 km/h and keeps audio playing. It never enables `video_in_motion`.
 
-- Pause means: send `VIDEO_FOCUS_NOTIFICATION{NATIVE}` so the HU shows its own screen, stop encoding, and keep the audio session running.
-- Resume: speed back to 0 for 2 s, then `VIDEO_FOCUS_NOTIFICATION{PROJECTED}`, force an IDR frame, restart encoding.
+- Pause means: send `VIDEO_FOCUS_REQUEST{NATIVE}` so the HU shows its own screen (the HU answers `VIDEO_FOCUS_NOTIFICATION{NATIVE}`), stop encoding, and keep the audio session running. The Pi stops encoding without waiting for the answer.
+- Resume: speed back to 0 for 2 s, then `VIDEO_FOCUS_REQUEST{PROJECTED}`. When `VIDEO_FOCUS_NOTIFICATION{PROJECTED}` arrives, force an IDR frame and restart encoding. An unsolicited `VIDEO_FOCUS_NOTIFICATION{NATIVE}` from the HU (the user left projection) also stops encoding.
 - Compare `speed_e3 > 0`. Debounce the resume, not the pause.
 - Fail safe: no speed sensor, no speed sample within 3 s of the sensor start, or a `SENSOR_MESSAGE_ERROR` all count as **moving**. Video stays paused. `DRIVING_STATUS` with any restriction bit set also counts as moving.
 - Source-mode code never reads `cfg.video_in_motion`. If `source_mode != off` and `video_in_motion = true`, startup logs an error and source mode stays off. The sensor-spoofing code in `pkt_modify_hook` (`mitm.rs:2330` onward) is not in the source-mode path.
@@ -86,7 +128,7 @@ Rule: the Pi opens a channel only if it uses it. A channel it never opens never 
 
 1. From `HuCaps`, pick a `VideoConfiguration`. Prefer 1280×720 at 30 fps. Fall back to 800×480 at 30 fps, then to the smallest offered. Never pick 60 fps or above 720p on the Zero 2 W (SPEC risk: 512 MB RAM).
 2. Open the channel. Send `MEDIA_MESSAGE_SETUP{MEDIA_CODEC_VIDEO_H264_BP}`. Wait for `MEDIA_MESSAGE_CONFIG{STATUS_READY, max_unacked, configuration_indices}`. Choose the index of the config picked above. If the HU does not list it, take the first listed index and log it. [proto]
-3. HU may send `VIDEO_FOCUS_REQUEST`. Answer `VIDEO_FOCUS_NOTIFICATION{PROJECTED}`. Also send it unsolicited when the session is ready.
+3. Send `VIDEO_FOCUS_REQUEST{PROJECTED}` once `CONFIG` has arrived. The HU answers `VIDEO_FOCUS_NOTIFICATION{PROJECTED}`. Wait for that before the first frame. [proto]
 4. Send `MEDIA_MESSAGE_START{session_id, configuration_index}`. The Pi chooses `session_id`.
 5. Send `MEDIA_MESSAGE_CODEC_CONFIG` (message id `0x0001`) with SPS+PPS in Annex B. Then send `MEDIA_MESSAGE_DATA` (id `0x0000`) frames. Each is `[00 00][8-byte big-endian timestamp in µs][Annex-B access unit]`. [repo: layout at `overlay.rs:4080`]
 6. The first frame must be an IDR. Force another IDR on every START, on a return to PROJECTED focus, on resume after a motion pause, and every 2 s (GOP = 60 at 30 fps).
@@ -129,10 +171,10 @@ Kodi → ALSA loopback → Rust → PCM on the media-audio channel.
 
 1. Kernel: `CONFIG_SOUND=y`, `CONFIG_SND=y`, `CONFIG_SND_ALOOP=y` (or `m` and load at boot). Buildroot: `alsa-lib`. Kodi uses `hw:Loopback,0,0` for playback. aa-proxy-rs captures from `hw:Loopback,1,0`. [spike: confirm `snd-aloop` adds no meaningful boot time]
 2. Format: take the media `AudioConfiguration` from the SDR. 48000 Hz, 16-bit, 2 channels is typical. [proto] Kodi's output is set to the same rate in `asound.conf` with the `plug` plugin. If the HU offers only a different media format, resample in ALSA (`plug`) and never in Rust.
-3. Channel setup: open the media-audio channel, `SETUP{MEDIA_CODEC_AUDIO_PCM}`, wait for `CONFIG`, send unsolicited `AUDIO_FOCUS_NOTIFICATION{GAIN}` on the control channel, `START`.
+3. Channel setup: open the media-audio channel, `SETUP{MEDIA_CODEC_AUDIO_PCM}`, wait for `CONFIG`, send `AUDIO_FOCUS_REQUEST{GAIN}` on the control channel, wait for `AUDIO_FOCUS_NOTIFICATION{GAIN}`, then `START`.
 4. Data: read 20 ms periods (960 frames, 3840 bytes at 48 kHz stereo 16-bit). Each period is one `MEDIA_MESSAGE_DATA` of `[00 00][timestamp µs][PCM s16le interleaved]`. One DATA fits in one frame, so no fragmentation.
 5. Flow control: same `max_unacked` accounting as video. When the window is full, drop the oldest period and count it as an underrun in the log. Do not block the capture or Kodi will stall.
-6. Focus: the HU's `AUDIO_FOCUS_REQUEST` with LOSS stops the stream. The Pi sends `STOP`, pauses Kodi over JSON-RPC (`Player.PlayPause`) and replies LOSS. GAIN restores.
+6. Focus: the HU can take audio focus away by sending `AUDIO_FOCUS_NOTIFICATION` with a LOSS state (a request type cannot be LOSS, see section 1a). The Pi sends `STOP` and pauses Kodi over JSON-RPC (`Player.PlayPause`). To resume, the Pi sends `AUDIO_FOCUS_REQUEST{GAIN}` and restarts on the GAIN notification. When Kodi stops for good, the Pi sends `AUDIO_FOCUS_REQUEST{RELEASE}`.
 7. Audio keeps playing when video is paused for motion (SPEC).
 8. Fallback if `snd-aloop` is too heavy: ALSA `file` plugin writing raw PCM to a FIFO that Rust reads. Real-time pacing then depends on the reader, so it needs a spike. [spike]
 
@@ -260,16 +302,16 @@ Existing files (small hooks only; everything else is new code in `src/source_mod
 | --- | --- |
 | `src/lib.rs` | `pub mod source_mode;` |
 | `src/mitm.rs:153` | `KEYS_PATH` → `pub(crate)` |
-| `src/mitm.rs:1063,1077,1091,1113` | `Packet::{encrypt_payload, decrypt_payload, transmit, ssl_decapsulate_write}` → `pub(crate)` |
+| `src/mitm.rs:1063,1077,1091` | `Packet::{encrypt_payload, decrypt_payload, transmit}` → `pub(crate)`. `ssl_decapsulate_write` stays private: the session feeds the TLS buffer itself. |
 | `src/mitm.rs:4129,4229,4242` | `ssl_encapsulate`, `build_control_reply`, `build_control_reply_on_channel` → `pub(crate)` |
-| `src/mitm.rs:2982` | ByeBye condition: `stop_on_disconnect \|\| source_mode == OnDisconnect` |
+| `src/mitm.rs:2982` | ByeBye condition: `stop_on_disconnect \|\| source_mode == OnDisconnect`. Not part of T05; it comes with the mode-switching task (M4). |
 | `src/overlay.rs:741` | `create_baseline_encoder` → `pub(crate)` |
 | `src/config.rs:763,1208,1577` | `source_*` keys (section 7) and the startup guards |
 | `src/main.rs:1045-1120` | Source branch in the loop (section 6, step 4). `always` mode skips the Bluetooth handshake. |
 | `src/proxy.rs` | None in M2. `io_loop` stays the drive-mode path. |
 | `board/common/kernel.config`, `configs/rpi02w_defconfig`, `board/rpi/config.txt` | S1 |
 
-Reused unchanged: `ssl_rustls::ssl_builder` and `AaConnection`, `endpoint_reader` (`mitm.rs:4156`), `usb_functionfs.rs` (`FfsGadget`, `AccessorySession`, `rearm_for_next_session`), `v4l2_m2m.rs` (`probe_v4l2_codec_devices`, `V4l2M2mEncoder`), `packet_fragment.rs`, the generated protobuf types.
+Reused unchanged: `ssl_rustls::ssl_builder` and `AaConnection`, `usb_functionfs.rs` (`FfsGadget`, `AccessorySession`, `rearm_for_next_session`), `v4l2_m2m.rs` (`probe_v4l2_codec_devices`, `V4l2M2mEncoder`), `packet_fragment.rs`, the generated protobuf types.
 
 New files (names are proposals):
 

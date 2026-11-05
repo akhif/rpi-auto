@@ -761,6 +761,29 @@ pub struct AppConfig {
     pub media_tap_keyframe_toggle: bool,
     pub change_usb_order: bool,
     pub stop_on_disconnect: bool,
+    // Source mode ("Pi mode"), see docs/source-mode-design.md section 7. Defaults keep stock behaviour.
+    /// `off` (default): stock aa-proxy-rs. `on_disconnect`: Pi mode after a user Disconnect (not
+    /// active yet). `always`: bring-up mode, the Pi is the Android Auto source and skips the phone.
+    #[serde(default)]
+    pub source_mode: crate::source_mode::SourceMode,
+    /// Source mode frame rate. Capped at 30.
+    #[serde(default = "crate::source_mode::default_source_fps")]
+    pub source_fps: u8,
+    /// Source mode H.264 encoder: `auto`, `v4l2` or `software`.
+    #[serde(default)]
+    pub source_encoder: crate::source_mode::SourceEncoder,
+    /// Source mode video: `test_pattern` or `kodi`.
+    #[serde(default)]
+    pub source_video: crate::source_mode::SourceVideo,
+    /// ALSA capture device for source mode audio.
+    #[serde(default = "crate::source_mode::default_source_audio_device")]
+    pub source_audio_device: String,
+    /// Source mode touch: `false` logs touches only, `true` creates the uinput devices.
+    #[serde(default)]
+    pub source_touch_uinput: bool,
+    /// Source mode: request `SENSOR_LOCATION` from the head unit.
+    #[serde(default)]
+    pub source_gps: bool,
     pub waze_lht_workaround: bool,
     /// Synthesize a roundabout exit angle and substitute ROUNDABOUT_ENTER_AND_EXIT_CW/CCW
     /// maneuvers with their _WITH_ANGLE counterparts. The angle is estimated from the exit
@@ -1206,6 +1229,13 @@ impl Default for AppConfig {
             media_tap_keyframe_toggle: false,
             change_usb_order: false,
             stop_on_disconnect: false,
+            source_mode: Default::default(),
+            source_fps: crate::source_mode::default_source_fps(),
+            source_encoder: Default::default(),
+            source_video: Default::default(),
+            source_audio_device: crate::source_mode::default_source_audio_device(),
+            source_touch_uinput: false,
+            source_gps: false,
             waze_lht_workaround: false,
             roundabout_angle_synthesis_enabled: false,
             inject_navigation_status: false,
@@ -1575,6 +1605,13 @@ impl AppConfig {
         doc["media_tap_keyframe_toggle"] = value(self.media_tap_keyframe_toggle);
         doc["change_usb_order"] = value(self.change_usb_order);
         doc["stop_on_disconnect"] = value(self.stop_on_disconnect);
+        doc["source_mode"] = value(self.source_mode.to_string());
+        doc["source_fps"] = value(self.source_fps as i64);
+        doc["source_encoder"] = value(self.source_encoder.to_string());
+        doc["source_video"] = value(self.source_video.to_string());
+        doc["source_audio_device"] = value(&self.source_audio_device);
+        doc["source_touch_uinput"] = value(self.source_touch_uinput);
+        doc["source_gps"] = value(self.source_gps);
         doc["waze_lht_workaround"] = value(self.waze_lht_workaround);
         doc["roundabout_angle_synthesis_enabled"] = value(self.roundabout_angle_synthesis_enabled);
         doc["inject_navigation_status"] = value(self.inject_navigation_status);
